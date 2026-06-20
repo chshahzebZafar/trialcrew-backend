@@ -28,6 +28,10 @@ import type {
 const DAY = 86400000;
 const CYCLE_DAYS = 14;
 const DEMO_EMAIL = "sam.rivera@example.com";
+
+// Interactive-transaction limits. The default 5s timeout is too tight for our multi-step
+// writes (opt-in does ~8 round-trips) once there's real network latency or DB contention.
+const TX = { maxWait: 10_000, timeout: 20_000 } as const;
 const iso = (d?: Date | null): string | undefined => (d ? d.toISOString() : undefined);
 const err = (m: string, c: number) => Object.assign(new Error(m), { statusCode: c });
 
@@ -125,29 +129,6 @@ async function ownEnrollmentOrThrow(id: string, uid: string) {
   return e;
 }
 
-/**
- * Connect the two sides: ensure a founder-visible Enrollment exists for this
- * tester+app and is linked to the cycle, with the tester's display info denormalized.
- */
-async function linkEnrollment(cycleId: string, appId: string, uid: string, gmail: string, db: Db = prisma) {
-  const u = await db.user.findUnique({ where: { id: uid }, include: { professional: true } });
-  const existing = await db.enrollment.findFirst({ where: { appId, testerId: uid } });
-  const enr = existing
-    ? await db.enrollment.update({ where: { id: existing.id }, data: { status: "TESTING", gmail } })
-    : await db.enrollment.create({
-        data: {
-          appId,
-          testerId: uid,
-          testerName: u?.name ?? "Tester",
-          gmail,
-          badgeTier: u?.professional?.badgeTier ?? "NONE",
-          reliabilityScore: u?.professional?.reliabilityScore ?? 0,
-          status: "TESTING",
-          dailyDone: 0,
-        },
-      });
-  await db.cycle.update({ where: { id: cycleId }, data: { enrollmentId: enr.id } });
-}
 
 // ── Repo ──────────────────────────────────────────────────────────────────────
 
@@ -230,25 +211,40 @@ export const prismaRepo: Repo = {
 
   async optIn(campaignId: string): Promise<Cycle> {
     const uid = await demoUserId();
+    // Reads first — validation + the tester profile we denormalize onto the enrollment. Kept
+    // OUT of the transaction so the tx holds only writes (short, no timeout risk, small lock window).
+    const app = await prisma.app.findUnique({ where: { id: campaignId } });
+    if (!app) throw err("Campaign not found", 404);
+    const [existing, u, existingEnr] = await Promise.all([
+      prisma.cycle.findFirst({ where: { appId: campaignId, testerId: uid } }),
+      prisma.user.findUnique({ where: { id: uid }, include: { professional: true } }),
+      prisma.enrollment.findFirst({ where: { appId: campaignId, testerId: uid } }),
+    ]);
+    const t = Date.now();
+    const data = {
+      status: "ACTIVE" as const, optInAt: new Date(t), completesAt: new Date(t + CYCLE_DAYS * DAY),
+      checkIns: { create: ([3, 7, 10, 14] as CheckInDay[]).map((d) => ({ dayNumber: d, scheduledFor: new Date(t + d * DAY), status: "PENDING" as const })) },
+      dailyCheckIns: { create: Array.from({ length: CYCLE_DAYS }, (_, i) => ({ day: i + 1 })) },
+    };
     // Atomic: the cycle, the accepted-count, and the founder-visible enrollment all land together.
     return prisma.$transaction(async (tx) => {
-      const app = await tx.app.findUnique({ where: { id: campaignId } });
-      if (!app) throw err("Campaign not found", 404);
-      const t = Date.now();
-      const existing = await tx.cycle.findFirst({ where: { appId: campaignId, testerId: uid } });
-      const data = {
-        status: "ACTIVE" as const, optInAt: new Date(t), completesAt: new Date(t + CYCLE_DAYS * DAY),
-        checkIns: { create: ([3, 7, 10, 14] as CheckInDay[]).map((d) => ({ dayNumber: d, scheduledFor: new Date(t + d * DAY), status: "PENDING" as const })) },
-        dailyCheckIns: { create: Array.from({ length: CYCLE_DAYS }, (_, i) => ({ day: i + 1 })) },
-      };
       const cycle = existing
         ? await tx.cycle.update({ where: { id: existing.id }, data, include: cycleInclude })
         : await tx.cycle.create({ data: { appId: campaignId, testerId: uid, gmailForCampaign: `sam.tc.${app.name.toLowerCase().replace(/\s+/g, "")}@gmail.com`, ...data }, include: cycleInclude });
       await tx.professionalProfile.update({ where: { userId: uid }, data: { acceptedCycles: { increment: 1 } } });
-      // Make this tester visible in the founder's cohort.
-      await linkEnrollment(cycle.id, campaignId, uid, cycle.gmailForCampaign, tx);
+      // Make this tester visible in the founder's cohort (writes only — reads were done above).
+      const enr = existingEnr
+        ? await tx.enrollment.update({ where: { id: existingEnr.id }, data: { status: "TESTING", gmail: cycle.gmailForCampaign } })
+        : await tx.enrollment.create({
+            data: {
+              appId: campaignId, testerId: uid, testerName: u?.name ?? "Tester", gmail: cycle.gmailForCampaign,
+              badgeTier: u?.professional?.badgeTier ?? "NONE", reliabilityScore: u?.professional?.reliabilityScore ?? 0,
+              status: "TESTING", dailyDone: 0,
+            },
+          });
+      await tx.cycle.update({ where: { id: cycle.id }, data: { enrollmentId: enr.id } });
       return toCycle(cycle);
-    });
+    }, TX);
   },
 
   async submitProof(cycleId: string, screenshotUrl: string): Promise<Cycle> {
@@ -281,7 +277,7 @@ export const prismaRepo: Repo = {
         const dailyDone = await tx.dailyCheckIn.count({ where: { cycleId, doneAt: { not: null } } });
         await tx.enrollment.update({ where: { id: c.enrollmentId }, data: { dailyDone } });
       }
-    });
+    }, TX);
     return toCycle(await ownCycleOrThrow(cycleId, uid));
   },
 
@@ -306,7 +302,7 @@ export const prismaRepo: Repo = {
         const badge = completed >= 50 ? "EXPERT" : completed >= 20 ? "SENIOR" : completed >= 5 ? "VERIFIED" : "NONE";
         await tx.professionalProfile.update({ where: { userId: uid }, data: { completedCycles: completed, reliabilityScore: p.acceptedCycles > 0 ? completed / p.acceptedCycles : 0, badgeTier: badge } });
       }
-    });
+    }, TX);
     return toCycle(await ownCycleOrThrow(cycleId, uid));
   },
 
@@ -329,7 +325,7 @@ export const prismaRepo: Repo = {
           await tx.professionalProfile.update({ where: { userId: uid }, data: { stipendPending: { increment: 50 } } });
         }
       }
-    });
+    }, TX);
     return toCycle(await ownCycleOrThrow(cycleId, uid));
   },
 

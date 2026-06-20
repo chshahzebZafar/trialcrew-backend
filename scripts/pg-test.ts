@@ -125,7 +125,8 @@ async function run() {
   await expectStatus("C submitting feedback on B's cycle → 404", 404, () => as(C, () => repo.submitFeedback(cycle.id, { x: 1 })));
   await expectStatus("C reading A's enrollments → 404", 404, () => as(C, () => repo.getEnrollments(APP_X)));
   await expectStatus("C exporting A's emails → 404", 404, () => as(C, () => repo.exportEmails(APP_X)));
-  await expectStatus("C reading A's enrollment by id → 404", 404, () => as(C, () => repo.getEnrollment(mine!.id)));
+  const stolenEnr = await as(C, () => repo.getEnrollment(mine!.id));
+  check("C reading A's enrollment by id → null (scoped, no leak)", stolenEnr === null);
   await expectStatus("C broadcasting to an app it doesn't own → 403", 403, () => as(C, () => repo.sendBroadcast("com.pgtest.x", "spam")));
 
   console.log("\n[#1 anti-impersonation: reply identity comes from the caller]");

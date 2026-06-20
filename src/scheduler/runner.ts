@@ -70,5 +70,5 @@ async function applyPlan(plan: SweepPlan): Promise<void> {
     if (plan.pushes.length) {
       await tx.notification.createMany({ data: plan.pushes.map((p) => ({ userId: p.userId, kind: p.kind, title: p.title, body: p.body })) });
     }
-  });
+  }, { maxWait: 10_000, timeout: 20_000 });
 }
