@@ -13,6 +13,10 @@ let started = false;
 
 export async function startScheduler(): Promise<void> {
   if (started) return;
+  if (process.env.SCHEDULER_DISABLED === "true") {
+    console.log("[scheduler] disabled via SCHEDULER_DISABLED (e.g. a local backend sharing a deployed DB).");
+    return;
+  }
   if (!dbEnabled) {
     console.log("[scheduler] off — no DATABASE_URL (the 14-day cadence runs only on Postgres).");
     return;

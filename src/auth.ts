@@ -53,14 +53,19 @@ async function resolveUser(req: FastifyRequest): Promise<AuthUser> {
  */
 export function setupAuth(app: FastifyInstance) {
   if (clerkEnabled) {
-    app.addHook("onRequest", async (req, reply) => {
+    // Callback-style hook: resolve the user, then call done() INSIDE userStore.run so the
+    // request-scoped user propagates into the route handler.
+    //
+    // IMPORTANT: an `async` hook doing `userStore.enterWith(await resolveUser(req))` does NOT
+    // propagate to the handler in Fastify (the await detaches the AsyncLocalStorage context) —
+    // the handler then sees no user and the repo falls back to the seeded demo user. Verified
+    // with a Fastify repro: enterWith → context lost; run(done) → context kept.
+    app.addHook("onRequest", (req, reply, done) => {
       const path = req.url.split("?")[0];
-      if (req.method === "OPTIONS" || path === "/health" || path.startsWith("/webhooks/")) return;
-      try {
-        userStore.enterWith(await resolveUser(req));
-      } catch {
-        return reply.code(401).send({ error: { message: "Unauthorized", statusCode: 401 } });
-      }
+      if (req.method === "OPTIONS" || path === "/health" || path.startsWith("/webhooks/")) return done();
+      resolveUser(req)
+        .then((user) => userStore.run(user, () => done()))
+        .catch(() => reply.code(401).send({ error: { message: "Unauthorized", statusCode: 401 } }));
     });
   }
 
