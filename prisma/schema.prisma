@@ -1,0 +1,253 @@
+// TrialCrew — Prisma schema (PostgreSQL).
+//
+// Production data model. The server runs on an in-memory store by default (zero setup);
+// set DATABASE_URL to switch to this Postgres layer (src/prismaRepo.ts).
+//   npx prisma migrate deploy   # apply migrations
+//   npx prisma db seed          # load the demo data
+//
+// One `App` is the unifying entity: a founder owns it; testers browse published apps
+// (status ENROLLING) they don't own and opt into them, creating a Cycle.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BadgeTier {
+  NONE
+  VERIFIED
+  SENIOR
+  EXPERT
+}
+
+enum FounderAppStatus {
+  DRAFT
+  ENROLLING
+  INVITED
+  COMPLETE
+}
+
+enum CycleStatus {
+  MATCHED
+  INVITED
+  INSTALLED
+  ACTIVE
+  COMPLETED
+  DROPPED
+}
+
+enum EnrollmentStatus {
+  ENROLLED
+  TESTING
+  COMPLETED
+  DROPPED
+}
+
+enum RewardType {
+  PREMIUM_ACCESS
+  CREDITS
+  STIPEND
+}
+
+enum CheckInStatus {
+  PENDING
+  SENT
+  RESPONDED
+  MISSED
+}
+
+enum NotificationKind {
+  MATCH
+  BROADCAST
+  REMINDER
+  REWARD
+  SYSTEM
+}
+
+enum Role {
+  TESTER
+  FOUNDER
+}
+
+model User {
+  id             String   @id @default(cuid())
+  clerkId        String?  @unique
+  email          String   @unique
+  name           String?
+  isFounder      Boolean  @default(false)
+  isProfessional Boolean  @default(false)
+  pushToken      String?
+  createdAt      DateTime @default(now())
+
+  professional  ProfessionalProfile?
+  ownedApps     App[]            @relation("FounderApps")
+  cycles        Cycle[]          @relation("TesterCycles")
+  enrollments   Enrollment[]
+  notifications Notification[]
+  replies       BroadcastReply[]
+}
+
+model ProfessionalProfile {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vertical         String
+  categories       String[]
+  verified         Boolean   @default(false)
+  bio              String?
+  reliabilityScore Float     @default(0)
+  acceptedCycles   Int       @default(0)
+  completedCycles  Int       @default(0)
+  badgeTier        BadgeTier @default(NONE)
+  premiumUntil     DateTime?
+  credits          Int       @default(0)
+  stipendPending   Int       @default(0)
+  publicSlug       String    @unique
+}
+
+model App {
+  id            String           @id @default(cuid())
+  founderId     String
+  founder       User             @relation("FounderApps", fields: [founderId], references: [id])
+  name          String
+  packageName   String
+  vertical      String
+  description   String?
+  feedbackFocus String
+  playStoreUrl  String?
+  status        FounderAppStatus @default(DRAFT)
+  rewardType    RewardType       @default(PREMIUM_ACCESS)
+  minTesters    Int              @default(16)
+  feedbackCount Int              @default(0)
+  startDate     DateTime?
+  publishedAt   DateTime?
+  createdAt     DateTime         @default(now())
+
+  enrollments Enrollment[]
+  cycles      Cycle[]
+  broadcasts  Broadcast[]
+
+  @@index([packageName])
+  @@index([status])
+}
+
+model Enrollment {
+  id                String           @id @default(cuid())
+  appId             String
+  app               App              @relation(fields: [appId], references: [id])
+  testerId          String?
+  tester            User?            @relation(fields: [testerId], references: [id])
+  testerName        String
+  gmail             String
+  badgeTier         BadgeTier        @default(NONE)
+  reliabilityScore  Float            @default(0)
+  status            EnrollmentStatus @default(ENROLLED)
+  dailyDone         Int              @default(0)
+  feedbackSubmitted Boolean          @default(false)
+  rated             Boolean          @default(false)
+  enrolledAt        DateTime         @default(now())
+
+  cycle Cycle?
+}
+
+model Cycle {
+  id               String      @id @default(cuid())
+  appId            String
+  app              App         @relation(fields: [appId], references: [id])
+  testerId         String
+  tester           User        @relation("TesterCycles", fields: [testerId], references: [id])
+  enrollmentId     String?     @unique
+  enrollment       Enrollment? @relation(fields: [enrollmentId], references: [id])
+  gmailForCampaign String
+  status           CycleStatus @default(MATCHED)
+  optInAt          DateTime?
+  completesAt      DateTime?
+  completedAt      DateTime?
+  founderRating    Int?
+  rewardClaimed    Boolean     @default(false)
+
+  checkIns      CheckIn[]
+  dailyCheckIns DailyCheckIn[]
+  proof         InstallProof?
+  feedback      Feedback?
+
+  @@index([testerId])
+}
+
+model CheckIn {
+  id           String        @id @default(cuid())
+  cycleId      String
+  cycle        Cycle         @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  dayNumber    Int
+  scheduledFor DateTime
+  status       CheckInStatus @default(PENDING)
+  response     String?
+  respondedAt  DateTime?
+}
+
+model DailyCheckIn {
+  id      String    @id @default(cuid())
+  cycleId String
+  cycle   Cycle     @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  day     Int
+  doneAt  DateTime?
+
+  @@unique([cycleId, day])
+}
+
+model Feedback {
+  id          String   @id @default(cuid())
+  cycleId     String   @unique
+  cycle       Cycle    @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  answers     Json
+  submittedAt DateTime @default(now())
+}
+
+model InstallProof {
+  id            String   @id @default(cuid())
+  cycleId       String   @unique
+  cycle         Cycle    @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  screenshotUrl String
+  verified      Boolean  @default(false)
+  uploadedAt    DateTime @default(now())
+}
+
+model Broadcast {
+  id          String   @id @default(cuid())
+  appId       String
+  app         App      @relation(fields: [appId], references: [id])
+  packageName String
+  message     String
+  sentAt      DateTime @default(now())
+
+  replies BroadcastReply[]
+
+  @@index([packageName])
+}
+
+model BroadcastReply {
+  id          String    @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  authorId    String?
+  author      User?     @relation(fields: [authorId], references: [id])
+  authorName  String
+  authorRole  Role
+  message     String
+  sentAt      DateTime  @default(now())
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      NotificationKind
+  title     String
+  body      String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+}
