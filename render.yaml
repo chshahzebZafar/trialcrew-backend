@@ -1,0 +1,44 @@
+# Render Blueprint — provisions the TrialCrew backend + Postgres together.
+# This file sits at the root of the trialcrew-backend repo. Render reads it on
+# Dashboard → New → Blueprint → connect this repo → it creates both resources.
+services:
+  - type: web
+    name: trialcrew-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile      # repo root is the backend
+    region: oregon                    # keep the DB in the same region (below)
+    plan: starter                     # always-on, so the hourly scheduler keeps running.
+                                      # 'free' works for testing but SPINS DOWN when idle → sweeps pause.
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL             # injected from the managed Postgres below (internal URL)
+        fromDatabase:
+          name: trialcrew-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      # Secrets — set these in the Render dashboard (sync:false keeps them out of git).
+      # Leave unset to run in demo mode (single user); set them for real multi-user auth.
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_WEBHOOK_SECRET
+        sync: false
+      # Optional — Cloudflare R2 proof uploads (inert until all are set).
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+
+databases:
+  - name: trialcrew-db
+    plan: free                        # free Postgres expires after ~30 days — upgrade for production.
+    region: oregon
+    databaseName: trialcrew
+    user: trialcrew
