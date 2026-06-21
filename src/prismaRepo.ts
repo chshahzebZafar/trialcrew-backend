@@ -283,8 +283,12 @@ export const prismaRepo: Repo = {
 
   async updateCycleEmail(cycleId: string, gmail: string): Promise<Cycle> {
     const uid = await demoUserId();
-    await ownCycleOrThrow(cycleId, uid);
-    await prisma.cycle.update({ where: { id: cycleId }, data: { gmailForCampaign: gmail } });
+    const c = await ownCycleOrThrow(cycleId, uid);
+    await prisma.$transaction(async (tx) => {
+      await tx.cycle.update({ where: { id: cycleId }, data: { gmailForCampaign: gmail } });
+      // Keep the founder-facing enrollment's Gmail in sync (Play Console export uses it).
+      if (c.enrollmentId) await tx.enrollment.update({ where: { id: c.enrollmentId }, data: { gmail } });
+    }, TX);
     return toCycle(await ownCycleOrThrow(cycleId, uid));
   },
 
