@@ -119,6 +119,7 @@ model App {
   description   String?
   feedbackFocus String
   playStoreUrl  String?
+  testLink      String? // Play Console closed-test join link, pasted by the founder on Start
   status        FounderAppStatus @default(DRAFT)
   rewardType    RewardType       @default(PREMIUM_ACCESS)
   minTesters    Int              @default(16)

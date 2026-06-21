@@ -143,7 +143,13 @@ export async function routes(app: FastifyInstance) {
 
   app.post("/apps/:id/invited", (req) => {
     const { id } = parse(idParam, req.params);
-    return repo.markInvited(id);
+    const { testLink } = parse(z.object({ testLink: z.string().url().optional() }), req.body ?? {});
+    return repo.markInvited(id, testLink);
+  });
+
+  app.post("/apps/:id/end", (req) => {
+    const { id } = parse(idParam, req.params);
+    return repo.endCohort(id);
   });
 
   app.post("/testers/:id/rate", (req) => {

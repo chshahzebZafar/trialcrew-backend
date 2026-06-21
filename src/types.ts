@@ -28,6 +28,7 @@ export interface Campaign {
   testersMatched: number;
   rewardType: RewardType;
   playStoreUrl?: string;
+  testLink?: string;
 }
 
 export interface CheckIn {
@@ -104,6 +105,7 @@ export interface FounderApp {
   description?: string;
   feedbackFocus: string;
   playStoreUrl?: string;
+  testLink?: string;
   status: FounderAppStatus;
   rewardType: RewardType;
   minTesters: number;

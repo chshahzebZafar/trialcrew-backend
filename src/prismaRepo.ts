@@ -32,6 +32,20 @@ const DEMO_EMAIL = "sam.rivera@example.com";
 // Interactive-transaction limits. The default 5s timeout is too tight for our multi-step
 // writes (opt-in does ~8 round-trips) once there's real network latency or DB contention.
 const TX = { maxWait: 10_000, timeout: 20_000 } as const;
+
+/** Grant a cycle's reward to a tester's profile (premium / credits / stipend). */
+async function grantReward(tx: Db, userId: string, rewardType: string): Promise<void> {
+  const p = await tx.professionalProfile.findUnique({ where: { userId } });
+  if (!p) return;
+  if (rewardType === "PREMIUM_ACCESS") {
+    const base = p.premiumUntil ? Math.max(Date.now(), p.premiumUntil.getTime()) : Date.now();
+    await tx.professionalProfile.update({ where: { userId }, data: { premiumUntil: new Date(base + 90 * DAY) } });
+  } else if (rewardType === "CREDITS") {
+    await tx.professionalProfile.update({ where: { userId }, data: { credits: { increment: 500 } } });
+  } else {
+    await tx.professionalProfile.update({ where: { userId }, data: { stipendPending: { increment: 50 } } });
+  }
+}
 const iso = (d?: Date | null): string | undefined => (d ? d.toISOString() : undefined);
 
 /** Load (lazily creating) the tester profile DTO for a user. */
@@ -78,12 +92,12 @@ type AppRow = Prisma.AppGetPayload<{ include: { _count: { select: { enrollments:
 const cycleInclude = { app: true, checkIns: { orderBy: { dayNumber: "asc" } }, dailyCheckIns: { orderBy: { day: "asc" } }, proof: true, feedback: true } satisfies Prisma.CycleInclude;
 type CycleRow = Prisma.CycleGetPayload<{ include: typeof cycleInclude }>;
 
-function toCampaign(app: { id: string; name: string; packageName: string; vertical: string; feedbackFocus: string; description: string | null; rewardType: string; playStoreUrl: string | null }, matched: number): Campaign {
+function toCampaign(app: { id: string; name: string; packageName: string; vertical: string; feedbackFocus: string; description: string | null; rewardType: string; playStoreUrl: string | null; testLink: string | null }, matched: number): Campaign {
   return {
     id: app.id, appName: app.name, packageName: app.packageName, vertical: app.vertical,
     feedbackFocus: app.feedbackFocus, description: app.description ?? undefined,
     testersNeeded: 12, testersMatched: matched, rewardType: app.rewardType as Campaign["rewardType"],
-    playStoreUrl: app.playStoreUrl ?? undefined,
+    playStoreUrl: app.playStoreUrl ?? undefined, testLink: app.testLink ?? undefined,
   };
 }
 
@@ -91,7 +105,7 @@ function toFounderApp(a: AppRow): FounderApp {
   return {
     id: a.id, name: a.name, packageName: a.packageName, vertical: a.vertical,
     description: a.description ?? undefined, feedbackFocus: a.feedbackFocus,
-    playStoreUrl: a.playStoreUrl ?? undefined, status: a.status, rewardType: a.rewardType,
+    playStoreUrl: a.playStoreUrl ?? undefined, testLink: a.testLink ?? undefined, status: a.status, rewardType: a.rewardType,
     minTesters: a.minTesters, enrolledCount: a._count.enrollments, feedbackCount: a.feedbackCount,
     startDate: iso(a.startDate), publishedAt: iso(a.publishedAt), createdAt: a.createdAt.toISOString(),
   };
@@ -238,12 +252,9 @@ export const prismaRepo: Repo = {
       prisma.user.findUnique({ where: { id: uid }, include: { professional: true } }),
       prisma.enrollment.findFirst({ where: { appId: campaignId, testerId: uid } }),
     ]);
-    const t = Date.now();
-    const data = {
-      status: "ACTIVE" as const, optInAt: new Date(t), completesAt: new Date(t + CYCLE_DAYS * DAY),
-      checkIns: { create: ([3, 7, 10, 14] as CheckInDay[]).map((d) => ({ dayNumber: d, scheduledFor: new Date(t + d * DAY), status: "PENDING" as const })) },
-      dailyCheckIns: { create: Array.from({ length: CYCLE_DAYS }, (_, i) => ({ day: i + 1 })) },
-    };
+    // Cohort model: opting in just RESERVES a spot (no clock yet). The founder's "Start" activates
+    // every waiting cycle at once on one synchronized 14-day clock (see markInvited).
+    const data = { status: "MATCHED" as const, optInAt: null, completesAt: null };
     // Atomic: the cycle, the accepted-count, and the founder-visible enrollment all land together.
     return prisma.$transaction(async (tx) => {
       const cycle = existing
@@ -336,17 +347,7 @@ export const prismaRepo: Repo = {
       if (c.status !== "COMPLETED") throw err("Cycle not complete", 400);
       if (c.rewardClaimed) return;
       await tx.cycle.update({ where: { id: cycleId }, data: { rewardClaimed: true } });
-      const p = await tx.professionalProfile.findUnique({ where: { userId: uid } });
-      if (p) {
-        if (c.app.rewardType === "PREMIUM_ACCESS") {
-          const base = p.premiumUntil ? Math.max(Date.now(), p.premiumUntil.getTime()) : Date.now();
-          await tx.professionalProfile.update({ where: { userId: uid }, data: { premiumUntil: new Date(base + 90 * DAY) } });
-        } else if (c.app.rewardType === "CREDITS") {
-          await tx.professionalProfile.update({ where: { userId: uid }, data: { credits: { increment: 500 } } });
-        } else {
-          await tx.professionalProfile.update({ where: { userId: uid }, data: { stipendPending: { increment: 50 } } });
-        }
-      }
+      await grantReward(tx, uid, c.app.rewardType);
     }, TX);
     return toCycle(await ownCycleOrThrow(cycleId, uid));
   },
@@ -411,10 +412,45 @@ export const prismaRepo: Repo = {
     return es.map((e) => e.gmail);
   },
 
-  async markInvited(id: string): Promise<FounderApp> {
+  async markInvited(id: string, testLink?: string): Promise<FounderApp> {
     const uid = await demoUserId();
-    const cur = await ownAppOrThrow(id, uid);
-    const a = await prisma.app.update({ where: { id }, data: { status: "INVITED", startDate: cur.startDate ?? new Date() }, include: { _count: { select: { enrollments: true } } } });
+    await ownAppOrThrow(id, uid);
+    const t = Date.now();
+    await prisma.$transaction(async (tx) => {
+      await tx.app.update({ where: { id }, data: { status: "INVITED", startDate: new Date(t), ...(testLink !== undefined ? { testLink } : {}) } });
+      // Synchronize the cohort: every reserved (MATCHED) cycle starts now, on one 14-day clock.
+      const waiting = await tx.cycle.findMany({ where: { appId: id, status: "MATCHED" }, select: { id: true } });
+      for (const c of waiting) {
+        await tx.cycle.update({
+          where: { id: c.id },
+          data: {
+            status: "ACTIVE", optInAt: new Date(t), completesAt: new Date(t + CYCLE_DAYS * DAY),
+            checkIns: { create: ([3, 7, 10, 14] as CheckInDay[]).map((d) => ({ dayNumber: d, scheduledFor: new Date(t + d * DAY), status: "PENDING" as const })) },
+            dailyCheckIns: { create: Array.from({ length: CYCLE_DAYS }, (_, i) => ({ day: i + 1 })) },
+          },
+        });
+      }
+    }, TX);
+    const a = await prisma.app.findUniqueOrThrow({ where: { id }, include: { _count: { select: { enrollments: true } } } });
+    return toFounderApp(a);
+  },
+
+  async endCohort(id: string): Promise<FounderApp> {
+    const uid = await demoUserId();
+    const app = await ownAppOrThrow(id, uid);
+    await prisma.$transaction(async (tx) => {
+      await tx.app.update({ where: { id }, data: { status: "COMPLETE" } });
+      // Complete every running cycle and pay out the reward to each tester (once).
+      const cycles = await tx.cycle.findMany({ where: { appId: id, status: { in: ["ACTIVE", "COMPLETED"] } } });
+      for (const c of cycles) {
+        if (c.status !== "COMPLETED") await tx.cycle.update({ where: { id: c.id }, data: { status: "COMPLETED", completedAt: new Date() } });
+        if (!c.rewardClaimed) {
+          await tx.cycle.update({ where: { id: c.id }, data: { rewardClaimed: true } });
+          await grantReward(tx, c.testerId, app.rewardType);
+        }
+      }
+    }, TX);
+    const a = await prisma.app.findUniqueOrThrow({ where: { id }, include: { _count: { select: { enrollments: true } } } });
     return toFounderApp(a);
   },
 

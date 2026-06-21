@@ -329,10 +329,17 @@ export const store = {
 
   exportEmails: (appId: string) => enrollments.filter((e) => e.appId === appId && e.status !== "DROPPED").map((e) => e.gmail),
 
-  markInvited(id: string): FounderApp {
+  markInvited(id: string, testLink?: string): FounderApp {
     const a = mustApp(id);
     a.status = "INVITED";
     a.startDate = a.startDate ?? iso(now());
+    if (testLink !== undefined) a.testLink = testLink;
+    return clone(a);
+  },
+
+  endCohort(id: string): FounderApp {
+    const a = mustApp(id);
+    a.status = "COMPLETE";
     return clone(a);
   },
 
