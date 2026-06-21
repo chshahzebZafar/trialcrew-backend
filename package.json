@@ -11,6 +11,7 @@
     "test:e2e": "tsx scripts/local-test.ts",
     "test:sweep": "tsx scripts/sweep-test.ts",
     "test:pg": "tsx scripts/pg-test.ts",
+    "db:fast-forward": "tsx scripts/fast-forward-cycle.ts",
     "check:contract": "node scripts/check-contract.mjs",
     "verify": "npm run typecheck && npm run check:contract && npm run test:e2e",
     "db:generate": "prisma generate",
