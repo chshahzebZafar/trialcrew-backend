@@ -386,6 +386,24 @@ export const prismaRepo: Repo = {
     return es.map(toEnrollment);
   },
 
+  // TESTING AID — seed fake enrollments up to the target so the founder flow can be tested solo.
+  async seedTestEnrollments(appId: string, count?: number): Promise<Enrollment[]> {
+    const uid = await demoUserId();
+    const app = await ownAppOrThrow(appId, uid);
+    const existing = await prisma.enrollment.count({ where: { appId } });
+    const need = count ?? Math.max(0, app.minTesters - existing);
+    const NAMES = ["Alex Carter", "Priya Nair", "Diego Santos", "Mei Lin", "Tom Webb", "Sara Khan", "Liam O'Brien", "Nina Petrov", "Omar Aziz", "Grace Park", "Jack Reed", "Yuki Tanaka", "Fatima Noor", "Ben Cohen", "Ivy Zhang"];
+    const TIERS = ["VERIFIED", "SENIOR", "EXPERT", "VERIFIED"] as const;
+    for (let i = 0; i < need; i++) {
+      const name = NAMES[(existing + i) % NAMES.length];
+      await prisma.enrollment.create({
+        data: { appId, testerName: name, gmail: `${name.toLowerCase().replace(/[^a-z]+/g, ".")}.${existing + i}@gmail.com`, badgeTier: TIERS[i % TIERS.length], reliabilityScore: 0.7 + (i % 3) * 0.1, status: "TESTING", dailyDone: 0 },
+      });
+    }
+    const es = await prisma.enrollment.findMany({ where: { appId }, orderBy: { enrolledAt: "asc" } });
+    return es.map(toEnrollment);
+  },
+
   async getEnrollment(id: string): Promise<Enrollment | null> {
     const uid = await demoUserId();
     const e = await prisma.enrollment.findFirst({ where: { id, app: { founderId: uid } } });
@@ -395,6 +413,13 @@ export const prismaRepo: Repo = {
   async submitApp(input): Promise<FounderApp> {
     const uid = await demoUserId();
     const a = await prisma.app.create({ data: { founderId: uid, name: input.name, packageName: input.packageName, vertical: input.vertical, feedbackFocus: input.feedbackFocus, description: input.description, playStoreUrl: input.playStoreUrl, rewardType: input.rewardType, status: "DRAFT" }, include: { _count: { select: { enrollments: true } } } });
+    return toFounderApp(a);
+  },
+
+  async updateApp(id, input): Promise<FounderApp> {
+    const uid = await demoUserId();
+    await ownAppOrThrow(id, uid);
+    const a = await prisma.app.update({ where: { id }, data: { name: input.name, packageName: input.packageName, vertical: input.vertical, feedbackFocus: input.feedbackFocus, description: input.description ?? null, playStoreUrl: input.playStoreUrl ?? null, rewardType: input.rewardType }, include: { _count: { select: { enrollments: true } } } });
     return toFounderApp(a);
   },
 

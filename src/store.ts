@@ -309,6 +309,7 @@ export const store = {
   getFounderTesters: () => clone(founderTesters),
   getFounderStats: () => clone(founderStats),
   getEnrollments: (appId: string) => clone(enrollments.filter((e) => e.appId === appId)),
+  seedTestEnrollments: (appId: string, _count?: number): Enrollment[] => clone(enrollments.filter((e) => e.appId === appId)),
   getEnrollment: (id: string) => { const e = enrollments.find((x) => x.id === id); return e ? clone(e) : null; },
 
   submitApp(input: { name: string; packageName: string; vertical: string; feedbackFocus: string; description?: string; playStoreUrl?: string; rewardType: FounderApp["rewardType"] }): FounderApp {
@@ -316,6 +317,14 @@ export const store = {
     founderApps = [app, ...founderApps];
     founderStats = { ...founderStats, appsSubmitted: founderStats.appsSubmitted + 1 };
     return clone(app);
+  },
+
+  updateApp(id: string, input: { name: string; packageName: string; vertical: string; feedbackFocus: string; description?: string; playStoreUrl?: string; rewardType: FounderApp["rewardType"] }): FounderApp {
+    const a = mustApp(id);
+    a.name = input.name; a.packageName = input.packageName; a.vertical = input.vertical;
+    a.feedbackFocus = input.feedbackFocus; a.description = input.description;
+    a.playStoreUrl = input.playStoreUrl; a.rewardType = input.rewardType;
+    return clone(a);
   },
 
   publishApp(id: string, input: { minTesters: number; startDate: string }): FounderApp {

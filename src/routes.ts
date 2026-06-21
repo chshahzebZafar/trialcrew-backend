@@ -135,6 +135,16 @@ export async function routes(app: FastifyInstance) {
     return repo.submitApp(input);
   });
 
+  app.patch("/apps/:id", (req) => {
+    const { id } = parse(idParam, req.params);
+    const input = parse(z.object({
+      name: z.string().min(2), packageName: z.string().regex(/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/i, "Invalid package name"),
+      vertical: z.string().min(2), feedbackFocus: z.string().min(3),
+      description: z.string().optional(), playStoreUrl: z.string().url().optional(), rewardType,
+    }), req.body);
+    return repo.updateApp(id, input);
+  });
+
   app.post("/apps/:id/publish", (req) => {
     const { id } = parse(idParam, req.params);
     const input = parse(z.object({ minTesters: z.number().int().min(12), startDate: z.string() }), req.body);
@@ -150,6 +160,13 @@ export async function routes(app: FastifyInstance) {
   app.post("/apps/:id/end", (req) => {
     const { id } = parse(idParam, req.params);
     return repo.endCohort(id);
+  });
+
+  // Testing aid — seed fake testers into your own app (owner-scoped).
+  app.post("/apps/:id/seed-testers", (req) => {
+    const { id } = parse(idParam, req.params);
+    const { count } = parse(z.object({ count: z.number().int().positive().optional() }), req.body ?? {});
+    return repo.seedTestEnrollments(id, count);
   });
 
   app.post("/testers/:id/rate", (req) => {
