@@ -23,6 +23,18 @@ const role = z.enum(["TESTER", "FOUNDER"]);
 export async function routes(app: FastifyInstance) {
   // ── Tester ──────────────────────────────────────────────────────────────────
   app.get("/me/profile", () => repo.getProfile());
+  app.patch("/me/profile", (req) => {
+    const input = parse(
+      z.object({
+        name: z.string().min(2).optional(),
+        vertical: z.string().min(2).optional(),
+        categories: z.array(z.string()).optional(),
+        bio: z.string().max(280).optional(),
+      }),
+      req.body,
+    );
+    return repo.updateProfile(input);
+  });
   app.get("/feedback/questions", () => repo.getFeedbackQuestions());
 
   app.post("/me/push-token", (req) => {

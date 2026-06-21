@@ -212,6 +212,13 @@ function mustApp(id: string): FounderApp {
 export const store = {
   // Tester
   getProfile: () => clone(profile),
+  updateProfile: (input: { name?: string; vertical?: string; categories?: string[]; bio?: string }): TesterProfile => {
+    if (input.name !== undefined) profile.name = input.name;
+    if (input.vertical !== undefined) profile.vertical = input.vertical;
+    if (input.categories !== undefined) profile.categories = input.categories;
+    if (input.bio !== undefined) profile.bio = input.bio;
+    return clone(profile);
+  },
   getFeedbackQuestions: () => clone(feedbackQuestions),
 
   // Device + role (no-op in memory; real in Postgres)

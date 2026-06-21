@@ -33,6 +33,18 @@ const DEMO_EMAIL = "sam.rivera@example.com";
 // writes (opt-in does ~8 round-trips) once there's real network latency or DB contention.
 const TX = { maxWait: 10_000, timeout: 20_000 } as const;
 const iso = (d?: Date | null): string | undefined => (d ? d.toISOString() : undefined);
+
+/** Load (lazily creating) the tester profile DTO for a user. */
+async function loadProfile(uid: string): Promise<TesterProfile> {
+  const user = await prisma.user.findUnique({ where: { id: uid }, include: { professional: true } });
+  if (!user) throw err("User not found", 404);
+  const p =
+    user.professional ??
+    (await prisma.professionalProfile.create({
+      data: { userId: uid, vertical: "Construction", categories: [], verified: false, publicSlug: `tester-${uid.slice(0, 10)}` },
+    }));
+  return { id: user.id, name: user.name ?? "Tester", email: user.email, vertical: p.vertical, categories: p.categories, verified: p.verified, bio: p.bio ?? undefined, reliabilityScore: p.reliabilityScore, acceptedCycles: p.acceptedCycles, completedCycles: p.completedCycles, badgeTier: p.badgeTier, premiumUntil: iso(p.premiumUntil), credits: p.credits, stipendPending: p.stipendPending, publicSlug: p.publicSlug };
+}
 const err = (m: string, c: number) => Object.assign(new Error(m), { statusCode: c });
 
 /**
@@ -134,16 +146,22 @@ async function ownEnrollmentOrThrow(id: string, uid: string) {
 
 export const prismaRepo: Repo = {
   async getProfile(): Promise<TesterProfile> {
+    return loadProfile(await demoUserId());
+  },
+
+  async updateProfile(input: { name?: string; vertical?: string; categories?: string[]; bio?: string }): Promise<TesterProfile> {
     const uid = await demoUserId();
-    const user = await prisma.user.findUnique({ where: { id: uid }, include: { professional: true } });
-    if (!user) throw err("User not found", 404);
-    // New Clerk users have no profile yet — create a sensible default lazily.
-    const p =
-      user.professional ??
-      (await prisma.professionalProfile.create({
-        data: { userId: uid, vertical: "Construction", categories: [], verified: false, publicSlug: `tester-${uid.slice(0, 10)}` },
-      }));
-    return { id: user.id, name: user.name ?? "Tester", email: user.email, vertical: p.vertical, categories: p.categories, verified: p.verified, bio: p.bio ?? undefined, reliabilityScore: p.reliabilityScore, acceptedCycles: p.acceptedCycles, completedCycles: p.completedCycles, badgeTier: p.badgeTier, premiumUntil: iso(p.premiumUntil), credits: p.credits, stipendPending: p.stipendPending, publicSlug: p.publicSlug };
+    if (input.name !== undefined) await prisma.user.update({ where: { id: uid }, data: { name: input.name } });
+    await loadProfile(uid); // ensure the professional profile row exists before updating
+    await prisma.professionalProfile.update({
+      where: { userId: uid },
+      data: {
+        ...(input.vertical !== undefined ? { vertical: input.vertical } : {}),
+        ...(input.categories !== undefined ? { categories: input.categories } : {}),
+        ...(input.bio !== undefined ? { bio: input.bio } : {}),
+      },
+    });
+    return loadProfile(uid);
   },
 
   async getFeedbackQuestions() { return feedbackQuestions; },
