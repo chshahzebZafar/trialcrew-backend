@@ -243,6 +243,7 @@ export const prismaRepo: Repo = {
 
   async optIn(campaignId: string): Promise<Cycle> {
     const uid = await demoUserId();
+    await loadProfile(uid); // ensure a tester profile exists (new testers may not have one yet)
     // Reads first — validation + the tester profile we denormalize onto the enrollment. Kept
     // OUT of the transaction so the tx holds only writes (short, no timeout risk, small lock window).
     const app = await prisma.app.findUnique({ where: { id: campaignId } });
