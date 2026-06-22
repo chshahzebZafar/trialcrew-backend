@@ -41,6 +41,7 @@ export async function routes(app: FastifyInstance) {
     const { token } = parse(z.object({ token: z.string().min(1) }), req.body);
     return repo.setPushToken(token);
   });
+  app.post("/me/test-push", () => repo.sendTestPush());
   app.post("/me/role", (req) => {
     const { isFounder, isProfessional } = parse(
       z.object({ isFounder: z.boolean(), isProfessional: z.boolean() }),

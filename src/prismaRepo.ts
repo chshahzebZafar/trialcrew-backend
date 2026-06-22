@@ -186,6 +186,15 @@ export const prismaRepo: Repo = {
     return { ok: true };
   },
 
+  async sendTestPush(): Promise<{ ok: true; sent: number; hasToken: boolean }> {
+    const uid = await demoUserId();
+    const user = await prisma.user.findUnique({ where: { id: uid }, select: { pushToken: true } });
+    if (!user?.pushToken) return { ok: true, sent: 0, hasToken: false };
+    const { deliverPushes } = await import("./scheduler/push.js");
+    const sent = await deliverPushes([{ userId: uid, token: user.pushToken, kind: "REMINDER", title: "TrialCrew 🔔", body: "Push notifications are working — this is a test." }]);
+    return { ok: true, sent, hasToken: true };
+  },
+
   async setRole(isFounder: boolean, isProfessional: boolean): Promise<{ ok: true }> {
     const uid = await demoUserId();
     await prisma.user.update({ where: { id: uid }, data: { isFounder, isProfessional } });

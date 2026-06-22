@@ -223,6 +223,7 @@ export const store = {
 
   // Device + role (no-op in memory; real in Postgres)
   setPushToken: (_token: string): { ok: true } => ({ ok: true }),
+  sendTestPush: (): { ok: true; sent: number; hasToken: boolean } => ({ ok: true, sent: 0, hasToken: false }),
   setRole: (_isFounder: boolean, _isProfessional: boolean): { ok: true } => ({ ok: true }),
 
   getNotifications: () => clone(notifications),
